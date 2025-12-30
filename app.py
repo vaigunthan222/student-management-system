@@ -3,29 +3,44 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import hashlib
 
-# -------------------------------
+# ---------------------------------
 # PAGE CONFIG
-# -------------------------------
+# ---------------------------------
 st.set_page_config(page_title="Student Management System", layout="centered")
 
-# -------------------------------
-# FIREBASE INIT (CORRECT WAY)
-# -------------------------------
+# ---------------------------------
+# FIREBASE INITIALIZATION (FIXED)
+# ---------------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate(st.secrets["FIREBASE_KEY"])
-    firebase_admin.initialize_app(cred)
+    try:
+        firebase_key = dict(st.secrets["FIREBASE_KEY"])
+        cred = credentials.Certificate(firebase_key)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        st.error("❌ Firebase initialization failed")
+        st.stop()
 
 db = firestore.client()
 
-# -------------------------------
-# HELPERS
-# -------------------------------
+# ---------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# -------------------------------
+# ---------------------------------
 # AUTH FUNCTIONS
-# -------------------------------
+# ---------------------------------
+def create_default_staff():
+    staff_ref = db.collection("users").document("staff@example.com")
+    if not staff_ref.get().exists:
+        staff_ref.set({
+            "email": "staff@example.com",
+            "password": hash_password("staff123"),
+            "role": "staff",
+            "name": "Admin Staff"
+        })
+
 def login_user(email, password):
     user_ref = db.collection("users").document(email)
     user_doc = user_ref.get()
@@ -38,23 +53,13 @@ def login_user(email, password):
         return user
     return None
 
-def create_default_staff():
-    staff_ref = db.collection("users").document("staff@example.com")
-    if not staff_ref.get().exists:
-        staff_ref.set({
-            "email": "staff@example.com",
-            "password": hash_password("staff123"),
-            "role": "staff",
-            "name": "Admin Staff"
-        })
-
-# -------------------------------
+# ---------------------------------
 # STUDENT FUNCTIONS
-# -------------------------------
+# ---------------------------------
 def add_marks(student_email, student_name):
-    st.subheader("Add Semester Marks")
+    st.subheader("➕ Add Semester Marks")
 
-    sem = st.number_input("Semester Number", min_value=1, step=1)
+    semester = st.number_input("Semester Number", min_value=1, step=1)
     subjects = st.number_input("Number of Subjects", min_value=1, step=1)
 
     marks = []
@@ -71,18 +76,18 @@ def add_marks(student_email, student_name):
         db.collection("students").document(student_email).set({
             "email": student_email,
             "name": student_name,
-            f"semester_{sem}": {
+            f"semester_{semester}": {
                 "marks": marks,
                 "gpa": gpa
             }
         }, merge=True)
 
-        st.success(f"Semester {sem} saved with GPA {gpa}")
+        st.success(f"✅ Semester {semester} saved with GPA {gpa}")
 
 def view_marks(student_email):
-    st.subheader("My Academic Record")
-    doc = db.collection("students").document(student_email).get()
+    st.subheader("📊 My Academic Record")
 
+    doc = db.collection("students").document(student_email).get()
     if not doc.exists:
         st.info("No records found")
         return
@@ -92,11 +97,11 @@ def view_marks(student_email):
         if key.startswith("semester_"):
             st.write(key, value)
 
-# -------------------------------
+# ---------------------------------
 # STAFF FUNCTIONS
-# -------------------------------
+# ---------------------------------
 def add_student():
-    st.subheader("Add New Student")
+    st.subheader("👨‍🎓 Add New Student")
 
     name = st.text_input("Student Name")
     email = st.text_input("Student Email")
@@ -109,18 +114,18 @@ def add_student():
             "role": "student",
             "name": name
         })
-        st.success("Student account created")
+        st.success("✅ Student account created")
 
 def view_all_students():
-    st.subheader("All Students")
-    students = db.collection("students").stream()
+    st.subheader("📋 All Students")
 
+    students = db.collection("students").stream()
     for s in students:
         st.write(s.to_dict())
 
-# -------------------------------
+# ---------------------------------
 # MAIN APP
-# -------------------------------
+# ---------------------------------
 def main():
     create_default_staff()
 
@@ -140,7 +145,7 @@ def main():
                 st.success("Login successful")
                 st.rerun()
             else:
-                st.error("Invalid login")
+                st.error("Invalid email or password")
 
     else:
         user = st.session_state.user
@@ -158,5 +163,5 @@ def main():
             st.session_state.user = None
             st.rerun()
 
-# -------------------------------
+# ---------------------------------
 main()
