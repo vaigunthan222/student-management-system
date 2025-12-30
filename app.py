@@ -2,109 +2,105 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import hashlib
-import json
 
-# -------------------- PAGE CONFIG --------------------
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
 st.set_page_config(page_title="Student Management System", layout="centered")
 
-# -------------------- FIREBASE INIT --------------------
+# -------------------------------
+# FIREBASE INIT (CORRECT WAY)
+# -------------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate(json.loads(st.secrets["FIREBASE_KEY"]))
+    cred = credentials.Certificate(st.secrets["FIREBASE_KEY"])
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# -------------------- HELPERS --------------------
+# -------------------------------
+# HELPERS
+# -------------------------------
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-# -------------------- SESSION --------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
-    st.session_state.role = None
+# -------------------------------
+# AUTH FUNCTIONS
+# -------------------------------
+def login_user(email, password):
+    user_ref = db.collection("users").document(email)
+    user_doc = user_ref.get()
 
-# -------------------- AUTH --------------------
-def login():
-    st.subheader("Login")
+    if not user_doc.exists:
+        return None
 
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
+    user = user_doc.to_dict()
+    if user["password"] == hash_password(password):
+        return user
+    return None
 
-    if st.button("Login"):
-        doc = db.collection("users").document(email).get()
-        if doc.exists:
-            data = doc.to_dict()
-            if data["password"] == hash_password(password):
-                st.session_state.user = email
-                st.session_state.role = data["role"]
-                st.success("Login successful")
-                st.rerun()
-            else:
-                st.error("Wrong password")
-        else:
-            st.error("User not found")
+def create_default_staff():
+    staff_ref = db.collection("users").document("staff@example.com")
+    if not staff_ref.get().exists:
+        staff_ref.set({
+            "email": "staff@example.com",
+            "password": hash_password("staff123"),
+            "role": "staff",
+            "name": "Admin Staff"
+        })
 
-# -------------------- STUDENT --------------------
-def student_dashboard():
-    st.subheader("Student Dashboard")
+# -------------------------------
+# STUDENT FUNCTIONS
+# -------------------------------
+def add_marks(student_email, student_name):
+    st.subheader("Add Semester Marks")
 
-    email = st.session_state.user
-    student_ref = db.collection("students").document(email)
-    student_doc = student_ref.get()
+    sem = st.number_input("Semester Number", min_value=1, step=1)
+    subjects = st.number_input("Number of Subjects", min_value=1, step=1)
 
-    if student_doc.exists:
-        data = student_doc.to_dict()
-        st.write("### CGPA:", data.get("cgpa", 0))
-
-        for sem in data.get("semesters", []):
-            st.write(f"**Semester {sem['semester']} | GPA: {sem['gpa']}**")
-            for sub in sem["subjects"]:
-                st.write(f"- {sub['name']}: {sub['marks']}")
-
-    st.divider()
-    st.write("### Add New Semester")
-
-    subjects = st.number_input("Number of subjects", min_value=1, step=1)
-    subject_data = []
+    marks = []
     total = 0
 
     for i in range(subjects):
-        name = st.text_input(f"Subject {i+1} Name", key=f"s{i}")
-        marks = st.number_input(f"Marks for {name}", 0.0, 100.0, key=f"m{i}")
-        subject_data.append({"name": name, "marks": marks})
-        total += marks
+        m = st.number_input(f"Marks for Subject {i+1}", min_value=0.0, max_value=100.0)
+        marks.append(m)
+        total += m
 
-    if st.button("Save Semester"):
-        semesters = []
-        if student_doc.exists:
-            semesters = student_doc.to_dict().get("semesters", [])
-
+    if st.button("Save Marks"):
         gpa = round((total / subjects) / 10, 2)
-        semesters.append({
-            "semester": len(semesters) + 1,
-            "subjects": subject_data,
-            "gpa": gpa
-        })
 
-        cgpa = round(sum(s["gpa"] for s in semesters) / len(semesters), 2)
+        db.collection("students").document(student_email).set({
+            "email": student_email,
+            "name": student_name,
+            f"semester_{sem}": {
+                "marks": marks,
+                "gpa": gpa
+            }
+        }, merge=True)
 
-        student_ref.set({
-            "email": email,
-            "semesters": semesters,
-            "cgpa": cgpa
-        })
+        st.success(f"Semester {sem} saved with GPA {gpa}")
 
-        st.success("Semester saved successfully")
-        st.rerun()
+def view_marks(student_email):
+    st.subheader("My Academic Record")
+    doc = db.collection("students").document(student_email).get()
 
-# -------------------- STAFF --------------------
-def staff_dashboard():
-    st.subheader("Staff Dashboard")
+    if not doc.exists:
+        st.info("No records found")
+        return
 
-    st.write("### Add Student")
+    data = doc.to_dict()
+    for key, value in data.items():
+        if key.startswith("semester_"):
+            st.write(key, value)
+
+# -------------------------------
+# STAFF FUNCTIONS
+# -------------------------------
+def add_student():
+    st.subheader("Add New Student")
+
     name = st.text_input("Student Name")
     email = st.text_input("Student Email")
-    password = st.text_input("Student Password", type="password")
+    password = st.text_input("Password", type="password")
 
     if st.button("Create Student"):
         db.collection("users").document(email).set({
@@ -113,34 +109,54 @@ def staff_dashboard():
             "role": "student",
             "name": name
         })
-        st.success("Student created")
+        st.success("Student account created")
 
-    st.divider()
-    st.write("### All Students")
-
+def view_all_students():
+    st.subheader("All Students")
     students = db.collection("students").stream()
+
     for s in students:
-        d = s.to_dict()
-        st.write(f"**{d['email']}** | CGPA: {d['cgpa']}")
-        if st.button(f"Delete {d['email']}"):
-            db.collection("students").document(d["email"]).delete()
-            db.collection("users").document(d["email"]).delete()
-            st.warning("Student deleted")
+        st.write(s.to_dict())
+
+# -------------------------------
+# MAIN APP
+# -------------------------------
+def main():
+    create_default_staff()
+
+    st.title("🎓 Student Management System")
+
+    if "user" not in st.session_state:
+        st.session_state.user = None
+
+    if st.session_state.user is None:
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+
+        if st.button("Login"):
+            user = login_user(email, password)
+            if user:
+                st.session_state.user = user
+                st.success("Login successful")
+                st.rerun()
+            else:
+                st.error("Invalid login")
+
+    else:
+        user = st.session_state.user
+        st.success(f"Logged in as {user['name']} ({user['role']})")
+
+        if user["role"] == "student":
+            add_marks(user["email"], user["name"])
+            view_marks(user["email"])
+
+        if user["role"] == "staff":
+            add_student()
+            view_all_students()
+
+        if st.button("Logout"):
+            st.session_state.user = None
             st.rerun()
 
-# -------------------- MAIN --------------------
-st.title("🎓 Student Management System")
-
-if st.session_state.user is None:
-    login()
-else:
-    st.write(f"Logged in as **{st.session_state.role.upper()}**")
-    if st.button("Logout"):
-        st.session_state.user = None
-        st.session_state.role = None
-        st.rerun()
-
-    if st.session_state.role == "student":
-        student_dashboard()
-    else:
-        staff_dashboard()
+# -------------------------------
+main()
